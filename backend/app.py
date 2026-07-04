@@ -38,10 +38,22 @@ CORS(app)  # allow the Vite dev server (localhost:5173) to call this API
 # ---------------------------------------------------------------------------
 # Client setup — works with OpenAI, Groq, or any OpenAI-compatible API
 # ---------------------------------------------------------------------------
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    base_url=os.environ.get("OPENAI_BASE_URL") or None,
-)
+_client = None
+
+
+def get_client():
+    """Lazily construct the OpenAI client so the server can boot even when the
+    API key is a placeholder or the environment is misconfigured. Any client
+    construction error then surfaces at request time instead of import time."""
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            base_url=os.environ.get("OPENAI_BASE_URL") or None,
+        )
+    return _client
+
+
 MODEL = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 EMBED_MODEL = os.environ.get("EMBED_MODEL_NAME", "text-embedding-3-small")
 
@@ -110,7 +122,7 @@ def build_index():
         INDEX_PATH.write_text(json.dumps([]))
         return []
 
-    resp = client.embeddings.create(model=EMBED_MODEL, input=[r["text"] for r in records])
+    resp = get_client().embeddings.create(model=EMBED_MODEL, input=[r["text"] for r in records])
     for r, e in zip(records, resp.data):
         r["embedding"] = e.embedding
 
@@ -129,7 +141,7 @@ def retrieve(query: str, top_k: int = 3):
     records = load_index()
     if not records:
         return []
-    q_emb = client.embeddings.create(model=EMBED_MODEL, input=[query]).data[0].embedding
+    q_emb = get_client().embeddings.create(model=EMBED_MODEL, input=[query]).data[0].embedding
     scored = sorted(records, key=lambda r: cosine(q_emb, r["embedding"]), reverse=True)
     return scored[:top_k]
 
@@ -201,7 +213,7 @@ def chat():
         })
     chat_messages.extend(messages)
 
-    completion = client.chat.completions.create(
+    completion = get_client().chat.completions.create(
         model=MODEL,
         messages=chat_messages,
         temperature=0.7,
@@ -227,7 +239,7 @@ def button_press():
     _escalation_needed = False
 
     # Generate the opening check-in message
-    opening_msg = client.chat.completions.create(
+    opening_msg = get_client().chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": CHECKIN_SYSTEM_PROMPT},
@@ -269,7 +281,7 @@ def checkin_chat():
 
     _active_conversation.append({"role": "user", "content": user_msg})
 
-    completion = client.chat.completions.create(
+    completion = get_client().chat.completions.create(
         model=MODEL,
         messages=[{"role": "system", "content": CHECKIN_SYSTEM_PROMPT}] + _active_conversation,
         temperature=0.7,
